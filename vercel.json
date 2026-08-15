@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/forecast/today?refresh=1",
+      "schedule": "15 21 * * *"
+    }
+  ]
+}
