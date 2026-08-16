@@ -1,0 +1,174 @@
+// Netlify Function: /.netlify/functions/forecast-today
+// (mapped to /api/forecast/today via the redirect in netlify.toml)
+//
+// Pipeline:
+// 1. Call Astrologer API's moon-phase "context" endpoint (real astronomy, Kerykeion engine)
+//    -> returns structured moon-phase facts PLUS an AI-ready XML context string.
+// 2. If GEMINI_API_KEY is set, feed that context to Gemini and ask it to write the
+//    forecast in Evia's warm, second-person voice. Otherwise return the raw facts
+//    (aiSkipped: true) so the app still has something sensible to show.
+//
+// Env vars needed (Netlify → Site configuration → Environment variables):
+//   ASTROLOGER_API_KEY  — RapidAPI key for the Astrologer API (astrologer.p.rapidapi.com)
+//   GEMINI_API_KEY      — API key from https://aistudio.google.com (free tier, no card needed)
+//   GEMINI_MODEL        — optional, defaults to "gemini-2.5-flash"
+
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const WEEKDAYS_RU = ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'];
+
+exports.handler = async function (event) {
+  try {
+    const forceRefresh = event.queryStringParameters && event.queryStringParameters.refresh === '1';
+
+    const facts = await fetchAstroFacts();
+
+    const hasGeminiKey = !!process.env.GEMINI_API_KEY;
+    let aiResult = null;
+    let aiSkipped = true;
+
+    if (hasGeminiKey) {
+      try {
+        aiResult = await rewriteWithGemini(facts);
+        aiSkipped = false;
+      } catch (err) {
+        console.error('Gemini rewrite failed, falling back to raw facts:', err.message);
+        aiSkipped = true;
+      }
+    }
+
+    const now = new Date();
+    const payload = {
+      ok: true,
+      date: now.toISOString().slice(0, 10),
+      weekday: WEEKDAYS_RU[now.getDay()],
+      moonPhaseName: facts.phaseName,
+      moonIllumination: facts.illumination,
+      moonEmoji: facts.emoji,
+      teaser: aiResult ? aiResult.teaser : buildFallbackTeaser(facts),
+      text: aiResult ? aiResult.text : buildFallbackText(facts),
+      aiSkipped,
+      source: 'astrologer-api',
+      generatedAt: now.toISOString()
+    };
+
+    return {
+      statusCode: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': forceRefresh ? 'no-store' : 's-maxage=3600, stale-while-revalidate=1800'
+      },
+      body: JSON.stringify(payload)
+    };
+  } catch (err) {
+    console.error('forecast-today failed:', err);
+    return {
+      statusCode: 200,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ok: false,
+        error: 'forecast_unavailable',
+        message: 'Не удалось получить прогноз. Попробуйте обновить чуть позже.',
+        generatedAt: new Date().toISOString()
+      })
+    };
+  }
+};
+
+async function fetchAstroFacts() {
+  const now = new Date();
+  const resp = await fetch('https://astrologer.p.rapidapi.com/api/v5/moon-phase/context', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-RapidAPI-Host': 'astrologer.p.rapidapi.com',
+      'X-RapidAPI-Key': process.env.ASTROLOGER_API_KEY
+    },
+    body: JSON.stringify({
+      year: now.getUTCFullYear(),
+      month: now.getUTCMonth() + 1,
+      day: now.getUTCDate(),
+      hour: now.getUTCHours(),
+      minute: now.getUTCMinutes(),
+      latitude: 55.7558,
+      longitude: 37.6173,
+      timezone: 'Europe/Moscow',
+      location_precision: 4
+    })
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => '');
+    throw new Error(`Astrologer API ${resp.status}: ${errText.slice(0, 200)}`);
+  }
+
+  const data = await resp.json();
+  const overview = data?.moon_phase_overview || data?.data?.moon_phase_overview || {};
+  const moon = overview.moon || overview || {};
+
+  return {
+    phaseName: moon.phase_name || moon.phaseName || data?.phase_name || 'уточняется',
+    illumination: moon.illumination || data?.illumination || null,
+    emoji: moon.emoji || data?.emoji || '🌙',
+    aiContext: data?.context || data?.ai_context || JSON.stringify(data).slice(0, 2000),
+    rawOverview: overview
+  };
+}
+
+async function rewriteWithGemini(facts) {
+  const systemPrompt = `Ты — голос приложения «Эвия», тёплого женского wellness-приложения о чакрах, эмоциях и лунных циклах.
+Тебе дают реальные астрономические факты о текущей фазе Луны (посчитаны точной астрономической библиотекой, не выдуманы).
+Перепиши их в живой, тёплый, поддерживающий текст на «ты», без эзотерического жаргона и воды. Пиши по-русски.
+Структура ответа — строго JSON без пояснений: {"teaser": "...", "text": "..."}.
+teaser — одна короткая строка (до 60 символов), например "Луна убывает · 62% освещённости".
+text — 5-8 коротких абзацев с пустой строкой между ними: что означает эта фаза Луны для настроения и энергии дня, на что хорошо направить внимание сегодня, тёплый итог. Обращайся к читательнице на «ты», без клише вроде «звёзды говорят».`;
+
+  const userPrompt = `Факты о текущей фазе Луны (реальные астрономические данные):
+Фаза: ${facts.phaseName}
+Освещённость: ${facts.illumination}
+
+Дополнительный контекст от астрономического движка:
+${facts.aiContext || '(нет дополнительных данных)'}`;
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${process.env.GEMINI_API_KEY}`;
+
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+      generationConfig: {
+        temperature: 0.6,
+        maxOutputTokens: 1000,
+        responseMimeType: 'application/json'
+      }
+    })
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => '');
+    throw new Error(`Gemini ${resp.status}: ${errText.slice(0, 200)}`);
+  }
+
+  const data = await resp.json();
+  const rawAnswer = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!rawAnswer) throw new Error('Gemini returned no text');
+
+  const cleaned = rawAnswer.replace(/```json|```/g, '').trim();
+  const parsed = JSON.parse(cleaned);
+  if (!parsed.teaser || !parsed.text) throw new Error('Gemini JSON missing fields');
+  return parsed;
+}
+
+function buildFallbackTeaser(facts) {
+  return `Луна: ${facts.phaseName}${facts.illumination ? ' · ' + facts.illumination + ' освещённости' : ''}`;
+}
+
+function buildFallbackText(facts) {
+  const lines = [
+    `Сегодня фаза Луны — ${facts.phaseName}${facts.illumination ? `, освещённость ${facts.illumination}` : ''}.`,
+    '',
+    'Подключите GEMINI_API_KEY, чтобы этот текст переписывался в тёплом голосе Эвии автоматически.'
+  ];
+  return lines.join('\n');
+}

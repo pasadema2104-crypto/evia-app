@@ -1,7 +1,1 @@
-{
-  "name": "evia-forecast-api",
-  "version": "2.0.0",
-  "private": true,
-  "description": "Serverless API for Evia: pulls real moon-phase astronomy from Astrologer API and rewrites it via Gemini (free tier).",
-  "dependencies": {}
-}
+{"name":"evia-forecast-api","version":"1.0.0","private":true}

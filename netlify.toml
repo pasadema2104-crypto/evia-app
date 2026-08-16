@@ -1,0 +1,15 @@
+[build]
+  functions = "netlify/functions"
+  publish = "."
+
+# Lets the front-end keep calling the friendly path /api/forecast/today
+# instead of the raw /.netlify/functions/forecast-today URL.
+[[redirects]]
+  from = "/api/forecast/today"
+  to = "/.netlify/functions/forecast-today"
+  status = 200
+  force = true
+
+# Refreshes the forecast once a night at 00:15 Moscow time (21:15 UTC).
+[functions."forecast-today"]
+  schedule = "15 21 * * *"
