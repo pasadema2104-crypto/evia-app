@@ -10,14 +10,13 @@
 //
 // Env vars needed:
 //   ASTROLOGER_API_KEY  — RapidAPI key for the Astrologer API (astrologer.p.rapidapi.com)
-//   GEMINI_API_KEY      — API key from https://aistudio.google.com (free tier, no card needed)
-//   GEMINI_MODEL        — optional, defaults to "gemini-2.5-flash"
+//   YANDEX_GPT_API_KEY  — API key for a Yandex Cloud service account (role ai.languageModels.user)
+//   YANDEX_FOLDER_ID    — the Yandex Cloud folder id the key belongs to
 //
 // NOTE: the moon-phase endpoint is location-independent for the phase/illumination
 // numbers themselves (same everywhere on Earth at a given instant) — we call the
 // UTC "now" variant so no birth-data / geocoding setup is required.
 
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 const WEEKDAYS_RU = ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'];
 
 module.exports = async (req, res) => {
@@ -26,16 +25,16 @@ module.exports = async (req, res) => {
 
     const facts = await fetchAstroFacts();
 
-    const hasGeminiKey = !!process.env.GEMINI_API_KEY;
+    const hasYandexKeys = !!(process.env.YANDEX_GPT_API_KEY && process.env.YANDEX_FOLDER_ID);
     let aiResult = null;
     let aiSkipped = true;
 
-    if (hasGeminiKey) {
+    if (hasYandexKeys) {
       try {
-        aiResult = await rewriteWithGemini(facts);
+        aiResult = await rewriteWithYandexGPT(facts);
         aiSkipped = false;
       } catch (err) {
-        console.error('Gemini rewrite failed, falling back to raw facts:', err.message);
+        console.error('YandexGPT rewrite failed, falling back to raw facts:', err.message);
         aiSkipped = true;
       }
     }
@@ -123,7 +122,7 @@ async function fetchAstroFacts() {
   };
 }
 
-async function rewriteWithGemini(facts) {
+async function rewriteWithYandexGPT(facts) {
   const systemPrompt = `Ты — голос приложения «Эвия», тёплого женского wellness-приложения о чакрах, эмоциях и лунных циклах.
 Тебе дают реальные астрономические факты о текущей фазе Луны (посчитаны точной астрономической библиотекой, не выдуманы).
 Перепиши их в живой, тёплый, поддерживающий текст на «ты», без эзотерического жаргона и воды. Пиши по-русски.
@@ -138,34 +137,35 @@ text — 5-8 коротких абзацев с пустой строкой ме
 Дополнительный контекст от астрономического движка:
 ${facts.aiContext || '(нет дополнительных данных)'}`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${process.env.GEMINI_API_KEY}`;
-
-  const resp = await fetch(url, {
+  const resp = await fetch('https://llm.api.cloud.yandex.net/foundationModels/v1/completion', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Api-Key ${process.env.YANDEX_GPT_API_KEY}`,
+      'x-folder-id': process.env.YANDEX_FOLDER_ID
+    },
     body: JSON.stringify({
-      systemInstruction: { parts: [{ text: systemPrompt }] },
-      contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-      generationConfig: {
-        temperature: 0.6,
-        maxOutputTokens: 1000,
-        responseMimeType: 'application/json'
-      }
+      modelUri: `gpt://${process.env.YANDEX_FOLDER_ID}/yandexgpt/latest`,
+      completionOptions: { stream: false, temperature: 0.6, maxTokens: 1200 },
+      messages: [
+        { role: 'system', text: systemPrompt },
+        { role: 'user', text: userPrompt }
+      ]
     })
   });
 
   if (!resp.ok) {
     const errText = await resp.text().catch(() => '');
-    throw new Error(`Gemini ${resp.status}: ${errText.slice(0, 200)}`);
+    throw new Error(`YandexGPT ${resp.status}: ${errText.slice(0, 200)}`);
   }
 
   const data = await resp.json();
-  const rawAnswer = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!rawAnswer) throw new Error('Gemini returned no text');
+  const rawAnswer = data?.result?.alternatives?.[0]?.message?.text;
+  if (!rawAnswer) throw new Error('YandexGPT returned no text');
 
   const cleaned = rawAnswer.replace(/```json|```/g, '').trim();
   const parsed = JSON.parse(cleaned);
-  if (!parsed.teaser || !parsed.text) throw new Error('Gemini JSON missing fields');
+  if (!parsed.teaser || !parsed.text) throw new Error('YandexGPT JSON missing fields');
   return parsed;
 }
 
@@ -177,7 +177,7 @@ function buildFallbackText(facts) {
   const lines = [
     `Сегодня фаза Луны — ${facts.phaseName}${facts.illumination ? `, освещённость ${facts.illumination}` : ''}.`,
     '',
-    'Подключите GEMINI_API_KEY, чтобы этот текст переписывался в тёплом голосе Эвии автоматически.'
+    'Подключите YANDEX_GPT_API_KEY и YANDEX_FOLDER_ID, чтобы этот текст переписывался в тёплом голосе Эвии автоматически.'
   ];
   return lines.join('\n');
 }
