@@ -102,15 +102,17 @@ async function fetchAstroFacts() {
   }
 
   const data = await resp.json();
-  const overview = data?.moon_phase_overview || data?.data?.moon_phase_overview || {};
-  const moon = overview.moon || overview || {};
+  const contextStr = data?.context || '';
+  const phaseNameMatch = contextStr.match(/<phase_name>([^<]+)<\/phase_name>/);
+  const illuminationMatch = contextStr.match(/<illumination>([^<]+)<\/illumination>/);
+  const emojiMatch = contextStr.match(/<emoji>([^<]+)<\/emoji>/);
 
   return {
-    phaseName: moon.phase_name || moon.phaseName || data?.phase_name || 'уточняется',
-    illumination: moon.illumination || data?.illumination || null,
-    emoji: moon.emoji || data?.emoji || '🌙',
-    aiContext: data?.context || data?.ai_context || JSON.stringify(data).slice(0, 2000),
-    rawOverview: overview
+    phaseName: phaseNameMatch ? phaseNameMatch[1] : 'уточняется',
+    illumination: illuminationMatch ? illuminationMatch[1] : null,
+    emoji: emojiMatch ? emojiMatch[1] : '🌙',
+    aiContext: contextStr || JSON.stringify(data).slice(0, 2000),
+    rawOverview: data
   };
 }
 
