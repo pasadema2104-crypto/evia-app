@@ -105,18 +105,21 @@ async function fetchAstroFacts() {
   }
 
   const data = await resp.json();
-  // Defensive extraction — response field names weren't fully confirmed ahead of time,
-  // so we try a few likely shapes and always keep the raw context text as a fallback
-  // for the AI rewrite step even if the specific fact fields below don't match.
-  const overview = data?.moon_phase_overview || data?.data?.moon_phase_overview || {};
-  const moon = overview.moon || overview || {};
+  // The API returns the facts embedded as an XML-flavoured string inside "context"
+  // (not as separate JSON fields) — e.g. <phase_name>Waning Crescent</phase_name>.
+  // We pull out the bits we want to show directly, and always keep the full context
+  // string to hand to the AI rewrite step regardless of whether these matches hit.
+  const contextStr = data?.context || '';
+  const phaseNameMatch = contextStr.match(/<phase_name>([^<]+)<\/phase_name>/);
+  const illuminationMatch = contextStr.match(/<illumination>([^<]+)<\/illumination>/);
+  const emojiMatch = contextStr.match(/<emoji>([^<]+)<\/emoji>/);
 
   return {
-    phaseName: moon.phase_name || moon.phaseName || data?.phase_name || 'уточняется',
-    illumination: moon.illumination || data?.illumination || null,
-    emoji: moon.emoji || data?.emoji || '🌙',
-    aiContext: data?.context || data?.ai_context || JSON.stringify(data).slice(0, 2000),
-    rawOverview: overview
+    phaseName: phaseNameMatch ? phaseNameMatch[1] : 'уточняется',
+    illumination: illuminationMatch ? illuminationMatch[1] : null,
+    emoji: emojiMatch ? emojiMatch[1] : '🌙',
+    aiContext: contextStr || JSON.stringify(data).slice(0, 2000),
+    rawOverview: data
   };
 }
 
