@@ -48,8 +48,13 @@ async function fetchAspects() {
       },
       body: JSON.stringify({ first_subject: subject, transit_subject: subject })
     });
-    if (!resp.ok) return [];
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      console.error(`fetchAspects: Astrologer API ${resp.status}: ${errText.slice(0, 300)}`);
+      return [];
+    }
     const data = await resp.json();
+    console.error('fetchAspects: raw aspects count =', (data?.chart_data?.aspects || []).length);
     const raw = data?.chart_data?.aspects || [];
     const majors = raw.filter(a =>
       MAJOR_ASPECTS.includes(String(a.aspect || '').toLowerCase()) &&
@@ -238,4 +243,3 @@ function buildFallbackText(facts) {
   ];
   return lines.join('\n');
 }
-
