@@ -35,6 +35,8 @@ async function fetchAspects() {
       day: now.getUTCDate(),
       hour: now.getUTCHours(),
       minute: now.getUTCMinutes(),
+      city: 'Moscow',
+      nation: 'RU',
       longitude: 37.6173,
       latitude: 55.7558,
       timezone: 'Europe/Moscow'
