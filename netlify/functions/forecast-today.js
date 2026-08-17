@@ -238,3 +238,4 @@ function buildFallbackText(facts) {
   ];
   return lines.join('\n');
 }
+
