@@ -19,11 +19,73 @@
 
 const WEEKDAYS_RU = ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'];
 
+const PLANET_RU = {
+  Sun: 'Солнце', Moon: 'Луна', Mercury: 'Меркурий', Venus: 'Венера', Mars: 'Марс',
+  Jupiter: 'Юпитер', Saturn: 'Сатурн', Uranus: 'Уран', Neptune: 'Нептун', Pluto: 'Плутон',
+  Chiron: 'Хирон', Mean_Node: 'Северный узел', True_Node: 'Северный узел'
+};
+const ASPECT_RU = {
+  conjunction: 'Соединение', opposition: 'Оппозиция', trine: 'Тригон', square: 'Квадрат',
+  sextile: 'Секстиль'
+};
+const MAJOR_ASPECTS = ['conjunction', 'opposition', 'trine', 'square', 'sextile'];
+
+async function fetchAspects() {
+  try {
+    const now = new Date();
+    const subject = {
+      name: 'Now',
+      year: now.getUTCFullYear(),
+      month: now.getUTCMonth() + 1,
+      day: now.getUTCDate(),
+      hour: now.getUTCHours(),
+      minute: now.getUTCMinutes(),
+      longitude: 37.6173,
+      latitude: 55.7558,
+      timezone: 'Europe/Moscow'
+    };
+    const resp = await fetch('https://astrologer.p.rapidapi.com/api/v5/chart/transit', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-RapidAPI-Host': 'astrologer.p.rapidapi.com',
+        'X-RapidAPI-Key': process.env.ASTROLOGER_API_KEY
+      },
+      body: JSON.stringify({ first_subject: subject, transit_subject: subject })
+    });
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    const raw = data?.chart_data?.aspects || [];
+    const majors = raw.filter(a =>
+      MAJOR_ASPECTS.includes(String(a.aspect || '').toLowerCase()) &&
+      a.p1_name !== a.p2_name // drop self-pairs (Sun-Sun etc.) — both subjects are the same moment
+    );
+    // Moon changes position fastest and is traditionally the most relevant body for a
+    // single day's forecast, so its aspects are surfaced first; ties broken by tightest orb.
+    majors.sort((a, b) => {
+      const aMoon = (a.p1_name === 'Moon' || a.p2_name === 'Moon') ? 0 : 1;
+      const bMoon = (b.p1_name === 'Moon' || b.p2_name === 'Moon') ? 0 : 1;
+      if (aMoon !== bMoon) return aMoon - bMoon;
+      return Math.abs(a.orb) - Math.abs(b.orb);
+    });
+    return majors.slice(0, 4).map(a => {
+      const p1 = PLANET_RU[a.p1_name] || a.p1_name;
+      const p2 = PLANET_RU[a.p2_name] || a.p2_name;
+      const asp = ASPECT_RU[String(a.aspect || '').toLowerCase()] || a.aspect;
+      return `${asp} ${p1}-${p2}`;
+    });
+  } catch (err) {
+    console.error('fetchAspects failed:', err.message);
+    return [];
+  }
+}
+
 module.exports = async (req, res) => {
   try {
     const forceRefresh = req.query && (req.query.refresh === '1');
 
-    const facts = await fetchAstroFacts();
+    const [facts, aspects] = await Promise.all([fetchAstroFacts(), fetchAspects()]);
+    facts.aspects = aspects;
 
     const hasYandexKeys = !!(process.env.YANDEX_GPT_API_KEY && process.env.YANDEX_FOLDER_ID);
     let aiResult = null;
@@ -47,6 +109,7 @@ module.exports = async (req, res) => {
       moonPhaseName: facts.phaseName,
       moonIllumination: facts.illumination,
       moonEmoji: facts.emoji,
+      aspects: facts.aspects || [],
       teaser: aiResult ? aiResult.teaser : buildFallbackTeaser(facts),
       text: aiResult ? aiResult.text : buildFallbackText(facts),
       aiSkipped,
@@ -133,6 +196,8 @@ text — 5-8 коротких абзацев с пустой строкой ме
   const userPrompt = `Факты о текущей фазе Луны (реальные астрономические данные):
 Фаза: ${facts.phaseName}
 Освещённость: ${facts.illumination}
+
+Аспекты дня: ${(facts.aspects && facts.aspects.length) ? facts.aspects.join(', ') : 'нет выраженных аспектов'}
 
 Дополнительный контекст от астрономического движка:
 ${facts.aiContext || '(нет дополнительных данных)'}`;
