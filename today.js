@@ -10,32 +10,93 @@
 //
 // Env vars needed:
 //   ASTROLOGER_API_KEY  — RapidAPI key for the Astrologer API (astrologer.p.rapidapi.com)
-//   GEMINI_API_KEY      — API key from https://aistudio.google.com (free tier, no card needed)
-//   GEMINI_MODEL        — optional, defaults to "gemini-2.5-flash"
+//   YANDEX_GPT_API_KEY  — API key for a Yandex Cloud service account (role ai.languageModels.user)
+//   YANDEX_FOLDER_ID    — the Yandex Cloud folder id the key belongs to
 //
 // NOTE: the moon-phase endpoint is location-independent for the phase/illumination
 // numbers themselves (same everywhere on Earth at a given instant) — we call the
 // UTC "now" variant so no birth-data / geocoding setup is required.
 
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 const WEEKDAYS_RU = ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'];
+
+const PLANET_RU = {
+  Sun: 'Солнце', Moon: 'Луна', Mercury: 'Меркурий', Venus: 'Венера', Mars: 'Марс',
+  Jupiter: 'Юпитер', Saturn: 'Сатурн', Uranus: 'Уран', Neptune: 'Нептун', Pluto: 'Плутон',
+  Chiron: 'Хирон', Mean_Node: 'Северный узел', True_Node: 'Северный узел'
+};
+const ASPECT_RU = {
+  conjunction: 'Соединение', opposition: 'Оппозиция', trine: 'Тригон', square: 'Квадрат',
+  sextile: 'Секстиль'
+};
+const MAJOR_ASPECTS = ['conjunction', 'opposition', 'trine', 'square', 'sextile'];
+
+async function fetchAspects() {
+  try {
+    const now = new Date();
+    const subject = {
+      name: 'Now',
+      year: now.getUTCFullYear(),
+      month: now.getUTCMonth() + 1,
+      day: now.getUTCDate(),
+      hour: now.getUTCHours(),
+      minute: now.getUTCMinutes(),
+      longitude: 37.6173,
+      latitude: 55.7558,
+      timezone: 'Europe/Moscow'
+    };
+    const resp = await fetch('https://astrologer.p.rapidapi.com/api/v5/chart/transit', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-RapidAPI-Host': 'astrologer.p.rapidapi.com',
+        'X-RapidAPI-Key': process.env.ASTROLOGER_API_KEY
+      },
+      body: JSON.stringify({ first_subject: subject, transit_subject: subject })
+    });
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    const raw = data?.chart_data?.aspects || [];
+    const majors = raw.filter(a =>
+      MAJOR_ASPECTS.includes(String(a.aspect || '').toLowerCase()) &&
+      a.p1_name !== a.p2_name // drop self-pairs (Sun-Sun etc.) — both subjects are the same moment
+    );
+    // Moon changes position fastest and is traditionally the most relevant body for a
+    // single day's forecast, so its aspects are surfaced first; ties broken by tightest orb.
+    majors.sort((a, b) => {
+      const aMoon = (a.p1_name === 'Moon' || a.p2_name === 'Moon') ? 0 : 1;
+      const bMoon = (b.p1_name === 'Moon' || b.p2_name === 'Moon') ? 0 : 1;
+      if (aMoon !== bMoon) return aMoon - bMoon;
+      return Math.abs(a.orb) - Math.abs(b.orb);
+    });
+    return majors.slice(0, 4).map(a => {
+      const p1 = PLANET_RU[a.p1_name] || a.p1_name;
+      const p2 = PLANET_RU[a.p2_name] || a.p2_name;
+      const asp = ASPECT_RU[String(a.aspect || '').toLowerCase()] || a.aspect;
+      return `${asp} ${p1}-${p2}`;
+    });
+  } catch (err) {
+    console.error('fetchAspects failed:', err.message);
+    return [];
+  }
+}
 
 module.exports = async (req, res) => {
   try {
     const forceRefresh = req.query && (req.query.refresh === '1');
 
-    const facts = await fetchAstroFacts();
+    const [facts, aspects] = await Promise.all([fetchAstroFacts(), fetchAspects()]);
+    facts.aspects = aspects;
 
-    const hasGeminiKey = !!process.env.GEMINI_API_KEY;
+    const hasYandexKeys = !!(process.env.YANDEX_GPT_API_KEY && process.env.YANDEX_FOLDER_ID);
     let aiResult = null;
     let aiSkipped = true;
 
-    if (hasGeminiKey) {
+    if (hasYandexKeys) {
       try {
-        aiResult = await rewriteWithGemini(facts);
+        aiResult = await rewriteWithYandexGPT(facts);
         aiSkipped = false;
       } catch (err) {
-        console.error('Gemini rewrite failed, falling back to raw facts:', err.message);
+        console.error('YandexGPT rewrite failed, falling back to raw facts:', err.message);
         aiSkipped = true;
       }
     }
@@ -48,6 +109,7 @@ module.exports = async (req, res) => {
       moonPhaseName: facts.phaseName,
       moonIllumination: facts.illumination,
       moonEmoji: facts.emoji,
+      aspects: facts.aspects || [],
       teaser: aiResult ? aiResult.teaser : buildFallbackTeaser(facts),
       text: aiResult ? aiResult.text : buildFallbackText(facts),
       aiSkipped,
@@ -74,14 +136,29 @@ module.exports = async (req, res) => {
 };
 
 async function fetchAstroFacts() {
-  const resp = await fetch('https://astrologer.p.rapidapi.com/api/v5/moon-phase/now-utc/context', {
+  // The API needs a full date/time + location payload (no bare "now" shortcut exists
+  // in this API version) — we feed it the current UTC moment. Moon phase itself is the
+  // same everywhere on Earth at a given instant; the location only affects chart framing,
+  // so a fixed reference point (Moscow, since Evia is a Russian-language app) is fine.
+  const now = new Date();
+  const resp = await fetch('https://astrologer.p.rapidapi.com/api/v5/moon-phase/context', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'X-RapidAPI-Host': 'astrologer.p.rapidapi.com',
       'X-RapidAPI-Key': process.env.ASTROLOGER_API_KEY
     },
-    body: JSON.stringify({})
+    body: JSON.stringify({
+      year: now.getUTCFullYear(),
+      month: now.getUTCMonth() + 1,
+      day: now.getUTCDate(),
+      hour: now.getUTCHours(),
+      minute: now.getUTCMinutes(),
+      latitude: 55.7558,
+      longitude: 37.6173,
+      timezone: 'Europe/Moscow',
+      location_precision: 4
+    })
   });
 
   if (!resp.ok) {
@@ -90,20 +167,25 @@ async function fetchAstroFacts() {
   }
 
   const data = await resp.json();
-  const overview = data?.moon_phase_overview || {};
-  const moon = overview.moon || {};
+  // The API returns the facts embedded as an XML-flavoured string inside "context"
+  // (not as separate JSON fields) — e.g. <phase_name>Waning Crescent</phase_name>.
+  // We pull out the bits we want to show directly, and always keep the full context
+  // string to hand to the AI rewrite step regardless of whether these matches hit.
+  const contextStr = data?.context || '';
+  const phaseNameMatch = contextStr.match(/<phase_name>([^<]+)<\/phase_name>/);
+  const illuminationMatch = contextStr.match(/<illumination>([^<]+)<\/illumination>/);
+  const emojiMatch = contextStr.match(/<emoji>([^<]+)<\/emoji>/);
 
   return {
-    phaseName: moon.phase_name || 'уточняется',
-    illumination: moon.illumination || null,
-    emoji: moon.emoji || '🌙',
-    // AI-ready XML context straight from the API — planetary/lunar detail as text
-    aiContext: data?.context || '',
-    rawOverview: overview
+    phaseName: phaseNameMatch ? phaseNameMatch[1] : 'уточняется',
+    illumination: illuminationMatch ? illuminationMatch[1] : null,
+    emoji: emojiMatch ? emojiMatch[1] : '🌙',
+    aiContext: contextStr || JSON.stringify(data).slice(0, 2000),
+    rawOverview: data
   };
 }
 
-async function rewriteWithGemini(facts) {
+async function rewriteWithYandexGPT(facts) {
   const systemPrompt = `Ты — голос приложения «Эвия», тёплого женского wellness-приложения о чакрах, эмоциях и лунных циклах.
 Тебе дают реальные астрономические факты о текущей фазе Луны (посчитаны точной астрономической библиотекой, не выдуманы).
 Перепиши их в живой, тёплый, поддерживающий текст на «ты», без эзотерического жаргона и воды. Пиши по-русски.
@@ -115,37 +197,40 @@ text — 5-8 коротких абзацев с пустой строкой ме
 Фаза: ${facts.phaseName}
 Освещённость: ${facts.illumination}
 
+Аспекты дня: ${(facts.aspects && facts.aspects.length) ? facts.aspects.join(', ') : 'нет выраженных аспектов'}
+
 Дополнительный контекст от астрономического движка:
 ${facts.aiContext || '(нет дополнительных данных)'}`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${process.env.GEMINI_API_KEY}`;
-
-  const resp = await fetch(url, {
+  const resp = await fetch('https://llm.api.cloud.yandex.net/foundationModels/v1/completion', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Api-Key ${process.env.YANDEX_GPT_API_KEY}`,
+      'x-folder-id': process.env.YANDEX_FOLDER_ID
+    },
     body: JSON.stringify({
-      systemInstruction: { parts: [{ text: systemPrompt }] },
-      contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-      generationConfig: {
-        temperature: 0.6,
-        maxOutputTokens: 1000,
-        responseMimeType: 'application/json'
-      }
+      modelUri: `gpt://${process.env.YANDEX_FOLDER_ID}/yandexgpt/latest`,
+      completionOptions: { stream: false, temperature: 0.6, maxTokens: 1200 },
+      messages: [
+        { role: 'system', text: systemPrompt },
+        { role: 'user', text: userPrompt }
+      ]
     })
   });
 
   if (!resp.ok) {
     const errText = await resp.text().catch(() => '');
-    throw new Error(`Gemini ${resp.status}: ${errText.slice(0, 200)}`);
+    throw new Error(`YandexGPT ${resp.status}: ${errText.slice(0, 200)}`);
   }
 
   const data = await resp.json();
-  const rawAnswer = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!rawAnswer) throw new Error('Gemini returned no text');
+  const rawAnswer = data?.result?.alternatives?.[0]?.message?.text;
+  if (!rawAnswer) throw new Error('YandexGPT returned no text');
 
   const cleaned = rawAnswer.replace(/```json|```/g, '').trim();
   const parsed = JSON.parse(cleaned);
-  if (!parsed.teaser || !parsed.text) throw new Error('Gemini JSON missing fields');
+  if (!parsed.teaser || !parsed.text) throw new Error('YandexGPT JSON missing fields');
   return parsed;
 }
 
@@ -157,7 +242,7 @@ function buildFallbackText(facts) {
   const lines = [
     `Сегодня фаза Луны — ${facts.phaseName}${facts.illumination ? `, освещённость ${facts.illumination}` : ''}.`,
     '',
-    'Подключите GEMINI_API_KEY, чтобы этот текст переписывался в тёплом голосе Эвии автоматически.'
+    'Подключите YANDEX_GPT_API_KEY и YANDEX_FOLDER_ID, чтобы этот текст переписывался в тёплом голосе Эвии автоматически.'
   ];
   return lines.join('\n');
 }
