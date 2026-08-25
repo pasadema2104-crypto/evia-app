@@ -22,8 +22,13 @@ const WEEKDAYS_RU = ['Воскресенье', 'Понедельник', 'Вто
 const PLANET_RU = {
   Sun: 'Солнце', Moon: 'Луна', Mercury: 'Меркурий', Venus: 'Венера', Mars: 'Марс',
   Jupiter: 'Юпитер', Saturn: 'Сатурн', Uranus: 'Уран', Neptune: 'Нептун', Pluto: 'Плутон',
-  Chiron: 'Хирон', Mean_Node: 'Северный узел', True_Node: 'Северный узел'
+  Chiron: 'Хирон',
+  Mean_Node: 'Северный узел', True_Node: 'Северный узел', North_Node: 'Северный узел',
+  Mean_South_Node: 'Южный узел', True_South_Node: 'Южный узел', South_Node: 'Южный узел'
 };
+function prettyPlanet(name) {
+  return PLANET_RU[name] || String(name || '').replace(/_/g, ' ');
+}
 const ASPECT_RU = {
   conjunction: 'Соединение', opposition: 'Оппозиция', trine: 'Тригон', square: 'Квадрат',
   sextile: 'Секстиль'
@@ -40,6 +45,8 @@ async function fetchAspects() {
       day: now.getUTCDate(),
       hour: now.getUTCHours(),
       minute: now.getUTCMinutes(),
+      city: 'Moscow',
+      nation: 'RU',
       longitude: 37.6173,
       latitude: 55.7558,
       timezone: 'Europe/Moscow'
@@ -53,8 +60,13 @@ async function fetchAspects() {
       },
       body: JSON.stringify({ first_subject: subject, transit_subject: subject })
     });
-    if (!resp.ok) return [];
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      console.error(`fetchAspects: Astrologer API ${resp.status}: ${errText.slice(0, 300)}`);
+      return [];
+    }
     const data = await resp.json();
+    console.error('fetchAspects: raw aspects count =', (data?.chart_data?.aspects || []).length);
     const raw = data?.chart_data?.aspects || [];
     const majors = raw.filter(a =>
       MAJOR_ASPECTS.includes(String(a.aspect || '').toLowerCase()) &&
@@ -68,9 +80,17 @@ async function fetchAspects() {
       if (aMoon !== bMoon) return aMoon - bMoon;
       return Math.abs(a.orb) - Math.abs(b.orb);
     });
-    return majors.slice(0, 4).map(a => {
-      const p1 = PLANET_RU[a.p1_name] || a.p1_name;
-      const p2 = PLANET_RU[a.p2_name] || a.p2_name;
+    const seen = new Set();
+    const deduped = [];
+    for (const a of majors) {
+      const key = [a.p1_name, a.p2_name].sort().join('|') + '|' + String(a.aspect || '').toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(a);
+    }
+    return deduped.slice(0, 4).map(a => {
+      const p1 = prettyPlanet(a.p1_name);
+      const p2 = prettyPlanet(a.p2_name);
       const asp = ASPECT_RU[String(a.aspect || '').toLowerCase()] || a.aspect;
       return `${asp} ${p1}-${p2}`;
     });
@@ -191,7 +211,7 @@ async function rewriteWithYandexGPT(facts) {
 Перепиши их в живой, тёплый, поддерживающий текст на «ты», без эзотерического жаргона и воды. Пиши по-русски.
 Структура ответа — строго JSON без пояснений: {"teaser": "...", "text": "..."}.
 teaser — одна короткая строка (до 60 символов), например "Луна убывает · 62% освещённости".
-text — 5-8 коротких абзацев с пустой строкой между ними: что означает эта фаза Луны для настроения и энергии дня, на что хорошо направить внимание сегодня, тёплый итог. Обращайся к читательнице на «ты», без клише вроде «звёзды говорят».`;
+text — 6-9 коротких абзацев с пустой строкой между ними: что означает эта фаза Луны для настроения и энергии дня, ЗАТЕМ отдельным абзацем — простыми словами объясни, что каждый из перечисленных аспектов дня означает именно сегодня (не используй астрологические термины типа "орб", просто по-человечески: на что этот аспект влияет — на чувства, общение, энергию и т.д.), и в конце — на что хорошо направить внимание сегодня, тёплый итог. Обращайся к читательнице на «ты», без клише вроде «звёзды говорят». Если аспектов дня не дано (список пуст) — просто пропусти абзац про аспекты, не упоминай их отсутствие.`;
 
   const userPrompt = `Факты о текущей фазе Луны (реальные астрономические данные):
 Фаза: ${facts.phaseName}
