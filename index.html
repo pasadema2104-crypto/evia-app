@@ -721,23 +721,25 @@
   /* ---------- CONCENTRATION/* ---------- CONCENTRATION TIMER (neon hourglass) ---------- */
   /* ---------- CONCENTRATION TIMER (neon hourglass) ---------- */
   #concentration{
-    background:radial-gradient(ellipse at 50% -10%, #2a1030 0%, #170a1e 45%, #0d0712 80%, #08050c 100%);
-    color:#ffe9f7;
+    background:
+      radial-gradient(ellipse at 30% 0%, rgba(255,255,255,0.5), transparent 55%),
+      linear-gradient(160deg, var(--sand-1) 0%, var(--sand-2) 55%, var(--sand-3) 100%);
+    color:var(--ink);
   }
   .conc-duration-row{display:flex; flex-wrap:wrap; justify-content:center; gap:8px; margin:6px 20px 22px;}
   .conc-chip{
     padding:8px 14px; border-radius:999px; font-size:12.5px; font-weight:700; cursor:pointer;
-    background:rgba(255,255,255,0.06); border:1px solid rgba(255,143,214,0.3); color:#ffd6ef;
+    background:rgba(255,255,255,0.55); border:1px solid var(--line); color:var(--ink-soft);
   }
-  .conc-chip.active{background:linear-gradient(120deg,#ff8fd6,#c94fd6); color:#1c0a1e; border-color:transparent; box-shadow:0 0 16px 2px rgba(255,143,214,0.6);}
+  .conc-chip.active{background:linear-gradient(120deg,var(--sand-3),var(--gold-deep)); color:#fff8ea; border-color:transparent; box-shadow:0 6px 16px rgba(169,119,47,0.35);}
 
   .hourglass-wrap{position:relative; width:160px; height:280px; margin:10px 0 20px;}
   .hg-glow{
     position:absolute; inset:-30px; border-radius:50%;
-    background:radial-gradient(circle, rgba(255,143,214,0.35), transparent 70%);
+    background:radial-gradient(circle, rgba(217,171,88,0.35), transparent 70%);
     animation:breathGlowPulse 3.2s ease-in-out infinite;
   }
-  .hourglass-svg{position:absolute; inset:0; width:100%; height:100%; z-index:2; filter:drop-shadow(0 8px 20px rgba(120,20,110,0.35));}
+  .hourglass-svg{position:absolute; inset:0; width:100%; height:100%; z-index:2; filter:drop-shadow(0 8px 20px rgba(120,84,30,0.3));}
   #hgSandTop, #hgSandBottom{transition:y 0.9s linear, height 0.9s linear;}
   .realistic-hg{filter:drop-shadow(0 12px 28px rgba(0,0,0,0.35));}
   .hourglass-wrap{background:radial-gradient(circle at 50% 40%, rgba(246,223,160,0.12), transparent 60%);}
@@ -753,16 +755,16 @@
     100%{ transform:translateY(8px); opacity:0; }
   }
 
-  .conc-clock{font-family:'Cormorant Garamond',serif; font-size:44px; font-weight:600; color:#ffe0f4; text-shadow:0 0 20px rgba(255,143,214,0.6); margin-bottom:18px;}
+  .conc-clock{font-family:'Cormorant Garamond',serif; font-size:44px; font-weight:600; color:var(--ink); text-shadow:0 2px 10px rgba(217,171,88,0.4); margin-bottom:18px;}
   .conc-controls{display:flex; gap:12px; margin-bottom:16px;}
   .conc-btn{
     padding:14px 22px; border-radius:999px; font-weight:700; font-size:13.5px; cursor:pointer;
     transition:transform .18s cubic-bezier(.34,1.56,.64,1);
   }
   .conc-btn:active{transform:scale(0.95);}
-  .conc-btn.ghost{background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); color:#ffe9f7;}
-  .conc-btn.primary{background:linear-gradient(120deg,#ff8fd6,#c94fd6); border:none; color:#1c0a1e; box-shadow:0 10px 26px rgba(255,111,201,0.4);}
-  .conc-hint{font-size:11.5px; color:rgba(255,233,247,0.5); text-align:center; max-width:260px; margin:0 20px;}
+  .conc-btn.ghost{background:rgba(255,255,255,0.6); border:1px solid var(--line); color:var(--ink-soft);}
+  .conc-btn.primary{background:linear-gradient(120deg,var(--sand-3),var(--gold-deep)); border:none; color:#fff8ea; box-shadow:0 10px 26px rgba(169,119,47,0.35);}
+  .conc-hint{font-size:11.5px; color:var(--ink-soft); text-align:center; max-width:260px; margin:0 20px;}
 
   /* ---------- PROFILE (pink-gold) ---------- */
   /* ---------- PROFILE (pink-gold) ---------- */
@@ -3038,6 +3040,8 @@
           <path d="M55,166 C52,196 52,232 60,258" fill="none" stroke="url(#hgHighlightGrad)" stroke-width="5" stroke-linecap="round" opacity="0.6"/>
         </svg>
       </div>
+
+      
       <div class="conc-clock" id="concClock">15:00</div>
       <div class="conc-controls">
         <button class="conc-btn ghost" onclick="resetConcTimer()">↺ Сброс</button>
@@ -6551,19 +6555,51 @@ function buildKpBars(points){
     return '<div class="space-bar-col"><div class="space-bar ' + cls + '" style="height:' + h + '%"></div><span>' + p.label + '</span><b>' + p.v + '</b></div>';
   }).join('') + '</div>';
 }
+function flareMagnitude(flux){
+  // log-scale magnitude for bar heights: A=1 .. X=5 roughly, fractional within class
+  const f = Number(flux) || 0;
+  if (f <= 0) return 0;
+  const order = Math.log10(f); // e.g. -6.3 for C2
+  // A starts at 1e-8 (order -8) .. X tops out around 1e-3 (order -3)
+  return Math.max(0, Math.min(5, order + 8));
+}
+function buildFlareBars(points){
+  if (!points || !points.length) return '<div class="space-bars empty">Нет данных о рентгене</div>';
+  return '<div class="space-bars" title="Рентген (1-8 A), недавние измерения">' + points.map(function(p){
+    const mag = flareMagnitude(p.flux);
+    const h = Math.max(6, (mag / 5) * 100);
+    const cls = mag >= 4 ? 'storm' : (mag >= 3 ? 'warn' : (mag >= 2 ? 'soft' : 'ok'));
+    return '<div class="space-bar-col"><div class="space-bar ' + cls + '" style="height:' + h + '%"></div><span>' + p.label + '</span><b>' + p.cls + '</b></div>';
+  }).join('') + '</div>';
+}
+async function fetchSpaceWeatherJson(kind){
+  // xras.ru serves per-timezone JSON files; UP00 (UTC) is the confirmed stable one,
+  // UP03 (Moscow) is tried first when available and falls back to UP00 otherwise.
+  const urls = [
+    'https://xras.ru/txt/' + kind + '_UP03.json',
+    'https://xras.ru/txt/' + kind + '_UP00.json'
+  ];
+  for (const url of urls) {
+    try {
+      const data = await fetchJsonCors(url);
+      if (data && data.data && data.data.length) return data;
+    } catch (e) {}
+  }
+  return null;
+}
 async function fetchSpaceWeather(){
   const card = document.getElementById('spaceWeatherCard');
   if (!card) return;
   card.innerHTML = '<div class="space-badge">XRAS</div><div class="t">Солнечная активность</div><div class="d">Обновляю данные с xras.ru…</div>';
   let kpJson = null, xrayJson = null;
   try {
-    kpJson = await fetchJsonCors('https://xras.ru/txt/kp_UP03.json');
-    xrayJson = await fetchJsonCors('https://xras.ru/txt/xray_UP03.json');
+    kpJson = await fetchSpaceWeatherJson('kp');
+    xrayJson = await fetchSpaceWeatherJson('xray');
   } catch (e) {
     console.warn('XRAS', e);
   }
 
-  let kpNow = null, ap = '—', f10 = '—', barsHtml = '', flareText = 'Нет данных о вспышках';
+  let kpNow = null, ap = '—', f10 = '—', kpBarsHtml = '', flareBarsHtml = '', flareText = 'Нет данных о вспышках';
   if (kpJson && kpJson.data && kpJson.data.length) {
     const today = kpJson.data[0];
     const yday = kpJson.data[1];
@@ -6576,7 +6612,7 @@ async function fetchSpaceWeather(){
     if (yday) parseKpHours(yday).forEach(function(p){ pts.push(p); });
     hours.forEach(function(p){ pts.push(p); });
     const last24 = pts.slice(-8);
-    barsHtml = buildKpBars(last24.length ? last24 : hours);
+    kpBarsHtml = buildKpBars(last24.length ? last24 : hours);
   }
   if (xrayJson && xrayJson.data && xrayJson.data.length) {
     const recent = xrayJson.data.slice(0, 90);
@@ -6593,10 +6629,18 @@ async function fetchSpaceWeather(){
       when = new Date(peakT).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
     } catch (e) { when = peakT; }
     flareText = 'Рентген: ' + cls + ' · пик ~' + peakCls + (when ? ' (' + when + ')' : '');
+    const sample = recent.filter(function(r, i){ return i % 10 === 0; }).slice(0, 8).reverse();
+    const flarePts = sample.map(function(r){
+      const f = parseFloat(r.long) || 0;
+      let t = '';
+      try { t = new Date(r.time).toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'}); } catch(e){ t = ''; }
+      return { flux: f, cls: xrayClass(f), label: t };
+    });
+    flareBarsHtml = buildFlareBars(flarePts);
   }
 
   if (kpNow == null && !xrayJson) {
-    card.innerHTML = '<div class="space-badge">XRAS</div><div class="t">Космос</div><div class="d">Не удалось загрузить данные (CORS или сеть). Открой <a href="https://xras.ru/magnetic_storms.html" target="_blank" rel="noopener" style="color:#e9c37e">xras.ru</a> или задеплой API-прокси.</div>';
+    card.innerHTML = '<div class="space-badge">XRAS</div><div class="t">Космос</div><div class="d">Не удалось загрузить данные (CORS или сеть). Открой <a href="https://xras.ru/magnetic_storms.html" target="_blank" rel="noopener" style="color:#e9c37e">xras.ru</a> напрямую.</div>';
     return;
   }
   if (kpNow == null) kpNow = 0;
@@ -6606,8 +6650,9 @@ async function fetchSpaceWeather(){
     + '<div class="t">Kp ' + kpNow + ' · ' + lvl.t + '</div>'
     + '<div class="d">' + lvl.tip + '</div>'
     + '<div class="space-meta">Ap ' + ap + ' · F10.7 ' + f10 + '<br>' + flareText + '</div>'
-    + '<div class="space-scale-label">Шкала Kp · ~24 часа (Москва)</div>'
-    + barsHtml
+    + '<div class="space-scale-label">Шкала магнитных бурь Kp · ~24 часа</div>'
+    + kpBarsHtml
+    + (flareBarsHtml ? '<div class="space-scale-label" style="margin-top:10px;">Шкала солнечных вспышек · рентген</div>' + flareBarsHtml : '')
     + '<div class="space-foot"><a href="https://xras.ru/sun_flares.html" target="_blank" rel="noopener">Вспышки</a> · <a href="https://xras.ru/magnetic_storms.html" target="_blank" rel="noopener">Бури</a> · XRAS</div>';
 }
 try{loadHealth();}catch(e){}
